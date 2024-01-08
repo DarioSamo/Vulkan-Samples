@@ -117,6 +117,20 @@ class HelloTriangle : public vkb::Application
 
 		/// A set of per-frame data.
 		std::vector<PerFrame> per_frame;
+
+		VkBuffer              staging_buffer                            = VK_NULL_HANDLE;
+		VkDeviceMemory        staging_buffer_memory                     = VK_NULL_HANDLE;
+		VkBuffer              triangle_positions_buffer                 = VK_NULL_HANDLE;
+		VkDeviceMemory        triangle_positions_buffer_memory          = VK_NULL_HANDLE;
+		VkBuffer              triangle_positions_computed_buffer        = VK_NULL_HANDLE;
+		VkDeviceMemory        triangle_positions_computed_buffer_memory = VK_NULL_HANDLE;
+		VkBuffer              triangle_colors_buffer                    = VK_NULL_HANDLE;
+		VkDeviceMemory        triangle_colors_buffer_memory             = VK_NULL_HANDLE;
+		VkPipeline            compute_pipeline                          = VK_NULL_HANDLE;
+		VkPipelineLayout      compute_pipeline_layout                   = VK_NULL_HANDLE;
+		VkDescriptorSetLayout compute_descriptor_set_layout             = VK_NULL_HANDLE;
+		VkDescriptorSet       compute_descriptor_set                    = VK_NULL_HANDLE;
+		VkDescriptorPool      compute_descriptor_pool                   = VK_NULL_HANDLE;
 	};
 
   public:

@@ -1,0 +1,29 @@
+#version 450
+
+layout(std430, binding = 0) buffer PosIn
+{
+	float positionsIn[];
+};
+
+layout(std430, binding = 1) buffer PosOut
+{
+	float positionsOut[];
+};
+
+layout(push_constant) uniform constants
+{
+	float time;
+} PushConstants;
+
+layout (local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main() 
+{
+	int index = int(gl_GlobalInvocationID.x);
+	float busyWork = PushConstants.time;
+	for (int i = 0; i < 1000000; i++) {
+		busyWork = cos(busyWork);
+	}
+
+	positionsOut[index] = positionsIn[index] + cos(index + PushConstants.time * 5.0f) * 0.1f + busyWork * 0.001f;
+}

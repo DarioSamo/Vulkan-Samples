@@ -17,11 +17,25 @@
 
 #include "hello_triangle.h"
 
+#define USE_BUFFER_BARRIERS 0
+
 #include "common/logging.h"
 #include "common/vk_common.h"
 #include "glsl_compiler.h"
 #include "platform/filesystem.h"
 #include "platform/window.h"
+
+static float triangle_positions[] = {
+    0.5, -0.5,
+    0.5, 0.5,
+    -0.5, 0.5
+};
+
+static float triangle_colors[] = {
+    1.0, 0.0, 0.0,
+	0.0, 1.0, 0.0, 
+	0.0, 0.0, 1.0
+};
 
 #if defined(VKB_DEBUG) || defined(VKB_VALIDATION_LAYERS)
 /// @brief A debug callback called from Vulkan validation layers.
@@ -686,7 +700,29 @@ void HelloTriangle::init_pipeline(Context &context)
 	VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 	VK_CHECK(vkCreatePipelineLayout(context.device, &layout_info, nullptr, &context.pipeline_layout));
 
+	VkVertexInputBindingDescription vertex_input_bindings[2];
+	vertex_input_bindings[0].binding   = 0;
+	vertex_input_bindings[0].stride    = sizeof(float) * 2;
+	vertex_input_bindings[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+	vertex_input_bindings[1].binding   = 1;
+	vertex_input_bindings[1].stride    = sizeof(float) * 3;
+	vertex_input_bindings[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+	VkVertexInputAttributeDescription vertex_input_attributes[2];
+	vertex_input_attributes[0].location = 0;
+	vertex_input_attributes[0].binding  = 0;
+	vertex_input_attributes[0].format   = VK_FORMAT_R32G32_SFLOAT;
+	vertex_input_attributes[0].offset   = 0;
+	vertex_input_attributes[1].location = 1;
+	vertex_input_attributes[1].binding  = 1;
+	vertex_input_attributes[1].format   = VK_FORMAT_R32G32B32_SFLOAT;
+	vertex_input_attributes[1].offset   = 0;
+
 	VkPipelineVertexInputStateCreateInfo vertex_input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+	vertex_input.vertexBindingDescriptionCount   = uint32_t(std::size(vertex_input_bindings));
+	vertex_input.pVertexBindingDescriptions    = vertex_input_bindings;
+	vertex_input.vertexAttributeDescriptionCount = uint32_t(std::size(vertex_input_attributes));
+	vertex_input.pVertexAttributeDescriptions    = vertex_input_attributes;
 
 	// Specify we will use triangle lists to draw geometry.
 	VkPipelineInputAssemblyStateCreateInfo input_assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
@@ -761,6 +797,48 @@ void HelloTriangle::init_pipeline(Context &context)
 	// Pipeline is baked, we can delete the shader modules now.
 	vkDestroyShaderModule(context.device, shader_stages[0].module, nullptr);
 	vkDestroyShaderModule(context.device, shader_stages[1].module, nullptr);
+
+	// Compute stage of the pipeline.
+	shader_stages[0].stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+	shader_stages[0].module = load_shader_module(context, "triangle.comp");
+	shader_stages[0].pName  = "main";
+
+	// Create the descriptor set layout.
+	VkDescriptorSetLayoutBinding set_layout_bindings[2];
+	set_layout_bindings[0].binding = 0;
+	set_layout_bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    set_layout_bindings[0].descriptorCount = 1;
+	set_layout_bindings[0].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+	set_layout_bindings[1].binding         = 1;
+	set_layout_bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	set_layout_bindings[1].descriptorCount = 1;
+	set_layout_bindings[1].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+
+	VkDescriptorSetLayoutCreateInfo set_layout_create_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+	set_layout_create_info.bindingCount = uint32_t(std::size(set_layout_bindings));
+	set_layout_create_info.pBindings    = set_layout_bindings;
+	VK_CHECK(vkCreateDescriptorSetLayout(context.device, &set_layout_create_info, nullptr, &context.compute_descriptor_set_layout));
+
+	// Create the compute pipeline layout.
+	VkPipelineLayoutCreateInfo compute_layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+	VkPushConstantRange push_constant_range;
+	push_constant_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+	push_constant_range.offset = 0;
+	push_constant_range.size = sizeof(float);
+	compute_layout_info.setLayoutCount         = 1;
+	compute_layout_info.pSetLayouts            = &context.compute_descriptor_set_layout;
+	compute_layout_info.pushConstantRangeCount = 1;
+	compute_layout_info.pPushConstantRanges    = &push_constant_range;
+	VK_CHECK(vkCreatePipelineLayout(context.device, &compute_layout_info, nullptr, &context.compute_pipeline_layout));
+
+	// Create compute pipeline.
+	VkComputePipelineCreateInfo compute_pipe{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+	compute_pipe.stage = shader_stages[0];
+	compute_pipe.layout = context.compute_pipeline_layout;
+	VK_CHECK(vkCreateComputePipelines(context.device, VK_NULL_HANDLE, 1, &compute_pipe, nullptr, &context.compute_pipeline));
+
+	// Pipeline is baked, we can delete the shader module now.
+	vkDestroyShaderModule(context.device, shader_stages[0].module, nullptr);
 }
 
 /**
@@ -823,6 +901,22 @@ VkResult HelloTriangle::acquire_next_image(Context &context, uint32_t *image)
 	return VK_SUCCESS;
 }
 
+static uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, VkMemoryPropertyFlags properties)
+{
+	VkPhysicalDeviceMemoryProperties memProperties;
+	vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+
+	for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)
+	{
+		if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties)
+		{
+			return i;
+		}
+	}
+
+	throw std::runtime_error("failed to find suitable memory type!");
+}
+
 /**
  * @brief Renders a triangle to the specified swapchain image.
  * @param context A Vulkan context set up for rendering.
@@ -841,6 +935,163 @@ void HelloTriangle::render_triangle(Context &context, uint32_t swapchain_index)
 	begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 	// Begin command recording
 	vkBeginCommandBuffer(cmd, &begin_info);
+
+	uint8_t *mappedData = nullptr;
+	if (context.staging_buffer == VK_NULL_HANDLE)
+	{
+		VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+		buffer_info.size        = sizeof(triangle_positions) + sizeof(triangle_colors);
+		buffer_info.usage       = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+		buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		VK_CHECK(vkCreateBuffer(context.device, &buffer_info, nullptr, &context.staging_buffer));
+
+		VkMemoryRequirements memRequirements;
+		vkGetBufferMemoryRequirements(context.device, context.staging_buffer, &memRequirements);
+
+		VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+		allocInfo.allocationSize  = memRequirements.size;
+		allocInfo.memoryTypeIndex = findMemoryType(context.gpu, memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+		VK_CHECK(vkAllocateMemory(context.device, &allocInfo, nullptr, &context.staging_buffer_memory));
+		VK_CHECK(vkBindBufferMemory(context.device, context.staging_buffer, context.staging_buffer_memory, 0));
+
+		buffer_info.size  = sizeof(triangle_positions);
+		buffer_info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+		VK_CHECK(vkCreateBuffer(context.device, &buffer_info, nullptr, &context.triangle_positions_buffer));
+
+		vkGetBufferMemoryRequirements(context.device, context.triangle_positions_buffer, &memRequirements);
+		allocInfo.allocationSize  = memRequirements.size;
+		allocInfo.memoryTypeIndex = findMemoryType(context.gpu, memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		VK_CHECK(vkAllocateMemory(context.device, &allocInfo, nullptr, &context.triangle_positions_buffer_memory));
+		VK_CHECK(vkBindBufferMemory(context.device, context.triangle_positions_buffer, context.triangle_positions_buffer_memory, 0));
+
+		buffer_info.size = sizeof(triangle_colors);
+		VK_CHECK(vkCreateBuffer(context.device, &buffer_info, nullptr, &context.triangle_colors_buffer));
+
+		vkGetBufferMemoryRequirements(context.device, context.triangle_colors_buffer, &memRequirements);
+		allocInfo.allocationSize  = memRequirements.size;
+		allocInfo.memoryTypeIndex = findMemoryType(context.gpu, memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		VK_CHECK(vkAllocateMemory(context.device, &allocInfo, nullptr, &context.triangle_colors_buffer_memory));
+		VK_CHECK(vkBindBufferMemory(context.device, context.triangle_colors_buffer, context.triangle_colors_buffer_memory, 0));
+
+		buffer_info.size  = sizeof(triangle_positions);
+		buffer_info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+		VK_CHECK(vkCreateBuffer(context.device, &buffer_info, nullptr, &context.triangle_positions_computed_buffer));
+
+		vkGetBufferMemoryRequirements(context.device, context.triangle_positions_computed_buffer, &memRequirements);
+		allocInfo.allocationSize  = memRequirements.size;
+		allocInfo.memoryTypeIndex = findMemoryType(context.gpu, memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		VK_CHECK(vkAllocateMemory(context.device, &allocInfo, nullptr, &context.triangle_positions_computed_buffer_memory));
+		VK_CHECK(vkBindBufferMemory(context.device, context.triangle_positions_computed_buffer, context.triangle_positions_computed_buffer_memory, 0));
+
+		VK_CHECK(vkMapMemory(context.device, context.staging_buffer_memory, 0, sizeof(triangle_positions) + sizeof(triangle_colors), 0, (void **) (&mappedData)));
+		memcpy(mappedData, triangle_positions, sizeof(triangle_positions));
+		memcpy(mappedData + sizeof(triangle_positions), triangle_colors, sizeof(triangle_colors));
+		vkUnmapMemory(context.device, context.staging_buffer_memory);
+
+		VkBufferCopy buffer_copy = {};
+		buffer_copy.srcOffset    = 0;
+		buffer_copy.dstOffset    = 0;
+		buffer_copy.size         = sizeof(triangle_positions);
+		vkCmdCopyBuffer(cmd, context.staging_buffer, context.triangle_positions_buffer, 1, &buffer_copy);
+
+		buffer_copy.srcOffset = sizeof(triangle_positions);
+		buffer_copy.dstOffset = 0;
+		buffer_copy.size      = sizeof(triangle_colors);
+		vkCmdCopyBuffer(cmd, context.staging_buffer, context.triangle_colors_buffer, 1, &buffer_copy);
+		
+		VkBufferMemoryBarrier bufferBarriers[2];
+		for (uint32_t i = 0; i < 2; i++)
+		{
+			bufferBarriers[i]                     = {};
+			bufferBarriers[i].sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+			bufferBarriers[i].srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
+			bufferBarriers[i].dstAccessMask       = i ? VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT : VK_ACCESS_SHADER_READ_BIT;
+			bufferBarriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			bufferBarriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			bufferBarriers[i].buffer              = i ? context.triangle_colors_buffer : context.triangle_positions_buffer;
+			bufferBarriers[i].offset              = 0;
+			bufferBarriers[i].size                = VK_WHOLE_SIZE;
+		}
+
+		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 0, nullptr, uint32_t(std::size(bufferBarriers)), bufferBarriers, 0, nullptr);
+
+		VkDescriptorPoolSize poolSize;
+		poolSize.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		poolSize.descriptorCount = 2;
+
+		VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+		poolInfo.maxSets       = 1;
+		poolInfo.poolSizeCount = 1;
+		poolInfo.pPoolSizes    = &poolSize;
+		VK_CHECK(vkCreateDescriptorPool(context.device, &poolInfo, nullptr, &context.compute_descriptor_pool));
+
+		VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+		allocateInfo.descriptorPool     = context.compute_descriptor_pool;
+		allocateInfo.pSetLayouts        = &context.compute_descriptor_set_layout;
+		allocateInfo.descriptorSetCount = 1;
+		VK_CHECK(vkAllocateDescriptorSets(context.device, &allocateInfo, &context.compute_descriptor_set));
+
+		VkDescriptorBufferInfo desc_buffer[2];
+		desc_buffer[0].buffer = context.triangle_positions_buffer;
+		desc_buffer[0].offset = 0;
+		desc_buffer[0].range = sizeof(triangle_positions);
+		desc_buffer[1].buffer = context.triangle_positions_computed_buffer;
+		desc_buffer[1].offset = 0;
+		desc_buffer[1].range  = sizeof(triangle_positions);
+
+		VkWriteDescriptorSet writes[2];
+		for (uint32_t i = 0; i < 2; i++)
+		{
+			writes[i]                 = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+			writes[i].dstSet          = context.compute_descriptor_set;
+			writes[i].dstBinding      = i;
+			writes[i].descriptorCount = 1;
+			writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+			writes[i].pBufferInfo     = &desc_buffer[i];
+		}
+
+		vkUpdateDescriptorSets(context.device, uint32_t(std::size(writes)), writes, 0, nullptr);
+	}
+
+	// Fill computed buffer with empty values to force a synchronization to be required.
+	vkCmdFillBuffer(cmd, context.triangle_positions_computed_buffer, 0, sizeof(triangle_positions), 0);
+
+#if USE_BUFFER_BARRIERS
+	VkBufferMemoryBarrier bufferBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+	bufferBarrier.srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
+	bufferBarrier.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+	bufferBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	bufferBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	bufferBarrier.buffer              = context.triangle_positions_computed_buffer;
+	bufferBarrier.offset              = 0;
+	bufferBarrier.size                = VK_WHOLE_SIZE;
+	vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0, nullptr);
+#else
+	VkMemoryBarrier memoryBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+	memoryBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+	memoryBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+	vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &memoryBarrier, 0, nullptr, 0, nullptr);
+#endif
+
+	// Compute shader with time as push constant.
+	static float time = 0.0f;
+	time += 1.0f / 60.0f;
+	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, context.compute_pipeline);
+	vkCmdPushConstants(cmd, context.compute_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(float), &time);
+	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, context.compute_pipeline_layout, 0, 1, &context.compute_descriptor_set, 0, nullptr);
+	vkCmdDispatch(cmd, 1, 1, 1);
+	
+#if USE_BUFFER_BARRIERS
+	bufferBarrier.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
+	bufferBarrier.dstAccessMask       = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+	bufferBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	bufferBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0, nullptr);
+#else
+	memoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+	memoryBarrier.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+	vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 1, &memoryBarrier, 0, nullptr, 0, nullptr);
+#endif
 
 	// Set clear color values.
 	VkClearValue clear_value;
@@ -875,6 +1126,9 @@ void HelloTriangle::render_triangle(Context &context, uint32_t swapchain_index)
 	vkCmdSetScissor(cmd, 0, 1, &scissor);
 
 	// Draw three vertices with one instance.
+	VkDeviceSize offsets[2] = { 0, 0 };
+	VkBuffer     buffers[2] = {context.triangle_positions_computed_buffer, context.triangle_colors_buffer};
+	vkCmdBindVertexBuffers(cmd, 0, uint32_t(std::size(buffers)), buffers, offsets);
 	vkCmdDraw(cmd, 3, 1, 0, 0);
 
 	// Complete render pass.
