@@ -20,10 +20,16 @@ layout (local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 void main() 
 {
 	int index = int(gl_GlobalInvocationID.x);
-	float busyWork = PushConstants.time;
-	for (int i = 0; i < 1000000; i++) {
-		busyWork = cos(busyWork);
+	float offset = 0;
+	float scale = 0.05f;
+	int triangle_index = index / 6;
+	if ((index % 2) == 1) {
+		offset = (triangle_index / 100) / 10.0f - 1.0f;
+		offset += cos(triangle_index) * 0.01f;
+	}
+	else {
+		offset = (triangle_index % 100) / 50.0f - 1.0f;
 	}
 
-	positionsOut[index] = positionsIn[index] + cos(index + PushConstants.time * 5.0f) * 0.1f + busyWork * 0.001f;
+	positionsOut[index] = (positionsIn[index % 6] + cos(index + PushConstants.time * 5.0f) * 0.1f) * scale + offset;
 }

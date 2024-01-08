@@ -19,10 +19,15 @@
 precision mediump float;
 
 layout (location = 0) in vec2 inPos;
-layout (location = 1) in vec3 inCol;
 layout(location = 0) out vec3 out_color;
+
+vec3 triangle_colors[3] = vec3[](
+    vec3(1.0, 0.0, 0.0),
+    vec3(0.0, 1.0, 0.0),
+    vec3(0.0, 0.0, 1.0)
+);
 
 void main() {
     gl_Position = vec4(inPos, 0.5, 1.0);
-    out_color = inCol;
+    out_color = triangle_colors[gl_VertexIndex % 3];
 }

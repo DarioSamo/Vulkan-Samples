@@ -124,8 +124,6 @@ class HelloTriangle : public vkb::Application
 		VkDeviceMemory        triangle_positions_buffer_memory          = VK_NULL_HANDLE;
 		VkBuffer              triangle_positions_computed_buffer        = VK_NULL_HANDLE;
 		VkDeviceMemory        triangle_positions_computed_buffer_memory = VK_NULL_HANDLE;
-		VkBuffer              triangle_colors_buffer                    = VK_NULL_HANDLE;
-		VkDeviceMemory        triangle_colors_buffer_memory             = VK_NULL_HANDLE;
 		VkPipeline            compute_pipeline                          = VK_NULL_HANDLE;
 		VkPipelineLayout      compute_pipeline_layout                   = VK_NULL_HANDLE;
 		VkDescriptorSetLayout compute_descriptor_set_layout             = VK_NULL_HANDLE;
